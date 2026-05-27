@@ -3,6 +3,7 @@ import mondaySdk from 'monday-sdk-js';
 
 const monday = mondaySdk();
 const CLIENT_BOARD_ID = 18414756407;
+const ITEMS_PER_PAGE = 5;
 
 function App() {
   const [boardName, setBoardName] = useState("Loading...");
@@ -15,10 +16,15 @@ function App() {
 
   const [expandedItems, setExpandedItems] = useState({});
   const [aiModal, setAiModal] = useState({ open: false, title: '', content: '' });
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     fetchBoardData(CLIENT_BOARD_ID);
   }, []);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterLocation, filterStatus, filterDate]);
 
   const fetchBoardData = async (boardId) => {
     try {
@@ -26,7 +32,7 @@ function App() {
         query {
           boards(ids: ${boardId}) {
             name
-            items_page {
+            items_page(limit: 500) {
               items {
                 id
                 name
@@ -187,6 +193,22 @@ function App() {
   const progressPercentage = totalProjects === 0 ? 0 : Math.round((completedCount / totalProjects) * 100);
   const defaultUserPhoto = users.length > 0 ? users[0].photo_thumb_small : "https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_960_720.png";
 
+  // --- Pagination ---
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
+  const paginatedItems = filteredItems.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  const getPageNumbers = () => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const range = new Set([1, totalPages]);
+    for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+      range.add(i);
+    }
+    return [...range].sort((a, b) => a - b);
+  };
+
   // --- AI Modal ---
   const openAiModal = (title, content) => setAiModal({ open: true, title, content });
   const closeAiModal = () => setAiModal({ open: false, title: '', content: '' });
@@ -295,7 +317,7 @@ function App() {
                     <div className="p-8 text-center text-outline font-semibold">No projects match the selected filters.</div>
                   )}
 
-                  {filteredItems.map((item, index) => {
+                  {paginatedItems.map((item, index) => {
                     const statusText = getColumnText(item, 'project_stage');
                     const isExpanded = !!expandedItems[item.id];
                     const subitems = item.subitems || [];
@@ -303,7 +325,7 @@ function App() {
                     const itemCompletion = getCompletionPercentage(subitems);
                     const barColor = itemCompletion === 100 ? 'bg-status-success' : itemCompletion >= 50 ? 'bg-status-info' : 'bg-status-critical';
                     const textColor = itemCompletion === 100 ? 'text-status-success' : itemCompletion >= 50 ? 'text-status-info' : 'text-status-critical';
-                    const isLast = index === filteredItems.length - 1;
+                    const isLast = index === paginatedItems.length - 1;
 
                     return (
                       <div key={item.id} className={`transition-all duration-200 hover:bg-surface-container-low hover:shadow-sm ${!isLast ? 'border-b border-border-subtle' : ''}`}>
@@ -412,15 +434,53 @@ function App() {
                 </div>
 
                 {/* Pagination */}
-                <div className="mt-6 flex items-center justify-center gap-2 text-sm">
-                  <button className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors">Previous</button>
-                  <button className="w-8 h-8 flex items-center justify-center bg-primary text-white rounded">1</button>
-                  <button className="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded">2</button>
-                  <button className="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded">3</button>
-                  <span className="px-1 text-on-surface-variant">...</span>
-                  <button className="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded">10</button>
-                  <button className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors">Next</button>
-                </div>
+                {totalPages > 1 && (
+                  <div className="mt-6 flex items-center justify-center gap-2 text-sm">
+                    <button
+                      className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      Previous
+                    </button>
+
+                    {(() => {
+                      const pageNums = getPageNumbers();
+                      const result = [];
+                      let lastPage = 0;
+                      for (const page of pageNums) {
+                        if (lastPage && page - lastPage > 1) {
+                          result.push(
+                            <span key={`ellipsis-${page}`} className="px-1 text-on-surface-variant">...</span>
+                          );
+                        }
+                        result.push(
+                          <button
+                            key={page}
+                            className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
+                              page === currentPage
+                                ? 'bg-primary text-white'
+                                : 'text-on-surface-variant hover:bg-surface-container-high'
+                            }`}
+                            onClick={() => setCurrentPage(page)}
+                          >
+                            {page}
+                          </button>
+                        );
+                        lastPage = page;
+                      }
+                      return result;
+                    })()}
+
+                    <button
+                      className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Right Column: Stats & Progress */}
