@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\edson\\\\OneDrive\\\\Desktop\\\\secure-client-portal\" -Force)",
+      "Bash(Select-Object Name, FullName)"
+    ]
+  }
+}

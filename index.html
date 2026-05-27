@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Secure Client Portal</title>
+    
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+    
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-highest": "#e4e2e1",
+                        "surface-container-high": "#eae8e7",
+                        "surface-container-low": "#f6f3f2",
+                        "surface-container": "#f0eded",
+                        "surface-dim": "#dcd9d9",
+                        "surface-muted": "#F0F3FF",
+                        "background": "#fbf9f8",
+                        "border-subtle": "#E1E4EB",
+                        "outline-variant": "#c7c4d8",
+                        "primary": "#4744e5",
+                        "primary-fixed": "#e1dfff",
+                        "primary-fixed-dim": "#c1c1ff",
+                        "secondary": "#8337be",
+                        "on-background": "#1b1c1c",
+                        "on-surface": "#1b1c1c",
+                        "on-surface-variant": "#464555",
+                        "status-success": "#00C875",
+                        "status-info": "#00A9FF",
+                        "status-warning": "#FFCB00",
+                        "status-critical": "#FF3D57",
+                        "outline": "#767587"
+                    },
+                    fontFamily: {
+                        "body-md": ["Inter"],
+                        "headline-xl": ["Inter"],
+                        "headline-md": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "label-md": ["Inter"],
+                        "label-sm": ["Inter"]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Inter', sans-serif; background-color: #fbf9f8; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
