@@ -1,8 +1,105 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import mondaySdk from 'monday-sdk-js';
 
 const monday = mondaySdk();
 const CLIENT_BOARD_ID = 18414756407;
+const ITEMS_PER_PAGE = 5;
+
+const PROJECT_STATUS_OPTIONS = [
+  { value: 'Assigned',     label: 'Assigned',     color: '#00A9FF' },
+  { value: 'Acknowledged', label: 'Acknowledged', color: '#8337be' },
+  { value: 'In progress',  label: 'In progress',  color: '#FFAB40' },
+  { value: 'On hold',      label: 'On hold',      color: '#FF3D57' },
+  { value: 'Completed',    label: 'Completed',    color: '#00C875' },
+];
+
+const SUBITEM_STATUS_OPTIONS = [
+  { value: 'Done',        label: 'Done',        color: '#00C875' },
+  { value: 'In progress', label: 'In progress', color: '#00A9FF' },
+  { value: 'Stuck',       label: 'Stuck',       color: '#FF3D57' },
+  { value: 'Not started', label: 'Not started', color: null },
+];
+
+function StatusDropdown({ value, options, onChange, size = 'md' }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState({ top: 0, right: 0 });
+  const btnRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e) => {
+      if (!btnRef.current?.contains(e.target) && !menuRef.current?.contains(e.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  const toggle = () => {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      const wouldOverflow = r.bottom + 220 > window.innerHeight;
+      setPos({
+        top: wouldOverflow ? r.top - 226 : r.bottom + 6,
+        right: window.innerWidth - r.right,
+      });
+    }
+    setOpen(o => !o);
+  };
+
+  const current = options.find(o => o.value === value);
+  const pillBg = current?.color ?? '#dcd9d9';
+  const pillColor = current?.color ? '#fff' : '#464555';
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className={`flex items-center gap-1 rounded-full font-semibold hover:opacity-80 transition-opacity whitespace-nowrap ${
+          size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-3 py-1 text-xs'
+        }`}
+        style={{ backgroundColor: pillBg, color: pillColor }}
+        onClick={toggle}
+      >
+        {current?.label ?? value ?? '—'}
+        <span className="material-symbols-outlined" style={{ fontSize: '14px', lineHeight: 1 }}>
+          {open ? 'expand_less' : 'expand_more'}
+        </span>
+      </button>
+
+      {open && (
+        <div
+          ref={menuRef}
+          className="fixed z-[9999] bg-surface-container-lowest border border-border-subtle rounded-xl shadow-xl py-1 min-w-[160px]"
+          style={{ top: pos.top, right: pos.right }}
+        >
+          {options.map(opt => (
+            <button
+              key={opt.value}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-on-surface hover:bg-surface-container-low transition-colors ${
+                opt.value === value ? 'bg-surface-container-low' : ''
+              }`}
+              onClick={() => { onChange(opt.value); setOpen(false); }}
+            >
+              <span
+                className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                style={{ backgroundColor: opt.color ?? '#dcd9d9' }}
+              />
+              <span>{opt.label}</span>
+              {opt.value === value && (
+                <span className="material-symbols-outlined ml-auto text-primary" style={{ fontSize: '14px' }}>
+                  check
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
 
 function App() {
   const [boardName, setBoardName] = useState("Loading...");
@@ -14,11 +111,16 @@ function App() {
   const [filterDate, setFilterDate] = useState('All');
 
   const [expandedItems, setExpandedItems] = useState({});
-  const [aiModal, setAiModal] = useState({ open: false, title: '', content: '' });
+  const [aiModal, setAiModal] = useState({ isOpen: false, text: "", isLoading: false });
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     fetchBoardData(CLIENT_BOARD_ID);
   }, []);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterLocation, filterStatus, filterDate]);
 
   const fetchBoardData = async (boardId) => {
     try {
@@ -26,7 +128,7 @@ function App() {
         query {
           boards(ids: ${boardId}) {
             name
-            items_page {
+            items_page(limit: 500) {
               items {
                 id
                 name
@@ -135,6 +237,23 @@ function App() {
     return 'bg-status-warning text-white';
   };
 
+  // --- HELPER: ENCONTRAR O DONO DA TAREFA ---
+  const getTaskOwner = (taskColumnValues) => {
+    const peopleColumn = taskColumnValues.find(c => c.id === 'person' || c.id === 'owner' || c.id === 'people');
+    if (!peopleColumn || !peopleColumn.value) return null;
+    try {
+      const parsedValue = JSON.parse(peopleColumn.value);
+      if (parsedValue.personsAndTeams && parsedValue.personsAndTeams.length > 0) {
+        const assignedUserId = parsedValue.personsAndTeams[0].id;
+        const matchedUser = users.find(u => Number(u.id) === Number(assignedUserId));
+        return matchedUser;
+      }
+    } catch (error) {
+      console.error("Erro ao ler dono da tarefa:", error);
+    }
+    return null;
+  };
+
   const getCompletionPercentage = (subitems) => {
     if (!subitems || subitems.length === 0) return 0;
     const doneCount = subitems.filter(sub => {
@@ -142,6 +261,22 @@ function App() {
       return status.includes('done');
     }).length;
     return Math.round((doneCount / subitems.length) * 100);
+  };
+
+  // --- HELPER: ENCONTRAR O LÍDER DO PROJETO ---
+  const getProjectLead = (projectColumnValues) => {
+    const leadColumn = projectColumnValues.find(c => c.id === 'lead' || c.id === 'person' || c.id === 'people');
+    if (!leadColumn || !leadColumn.value) return null;
+    try {
+      const parsedValue = JSON.parse(leadColumn.value);
+      if (parsedValue.personsAndTeams && parsedValue.personsAndTeams.length > 0) {
+        const leadId = parsedValue.personsAndTeams[0].id;
+        return users.find(u => Number(u.id) === Number(leadId));
+      }
+    } catch (error) {
+      console.error("Erro ao ler líder do projeto:", error);
+    }
+    return null;
   };
 
   // --- Filtering Logic ---
@@ -187,22 +322,92 @@ function App() {
   const progressPercentage = totalProjects === 0 ? 0 : Math.round((completedCount / totalProjects) * 100);
   const defaultUserPhoto = users.length > 0 ? users[0].photo_thumb_small : "https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_960_720.png";
 
-  // --- AI Modal ---
-  const openAiModal = (title, content) => setAiModal({ open: true, title, content });
-  const closeAiModal = () => setAiModal({ open: false, title: '', content: '' });
+  // --- Pagination ---
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / ITEMS_PER_PAGE));
+  const paginatedItems = filteredItems.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
-  const getMockAiSummary = (projectName, statusText) => {
-    const status = (statusText || '').toLowerCase();
-    if (status.includes('completed')) {
-      return `${projectName} has been successfully completed. All deliverables have been met and the project was closed on schedule. Final documentation and handoff are complete. No pending action items remain.`;
-    } else if (status.includes('in progress')) {
-      return `${projectName} is currently in progress and tracking on schedule. Key milestones are being met as planned. The team is actively working through the remaining tasks. No critical blockers at this time.`;
-    } else if (status.includes('on hold')) {
-      return `${projectName} is currently on hold pending stakeholder review and additional approvals. The team is prepared to resume work once the hold is lifted. Current completion is paused until further notice.`;
-    } else if (status.includes('acknowledged')) {
-      return `${projectName} has been acknowledged and is in the planning phase. The project scope has been reviewed and accepted. Work is scheduled to begin once resources are confirmed and allocated.`;
-    } else {
-      return `${projectName} has been assigned and is awaiting initial review. The project scope and deliverables are being defined. Team assignments will be confirmed once the kickoff meeting is scheduled.`;
+  const getPageNumbers = () => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const range = new Set([1, totalPages]);
+    for (let i = Math.max(2, currentPage - 1); i <= Math.min(totalPages - 1, currentPage + 1); i++) {
+      range.add(i);
+    }
+    return [...range].sort((a, b) => a - b);
+  };
+
+  // --- GERADOR DE RESUMO IA (COM VERIFICAÇÃO PRÉVIA / CACHE) ---
+  const handleGenerateAI = async (itemId) => {
+    // Dá um feedback imediato na UI
+    setAiModal({ isOpen: true, text: "Buscando resumo do projeto...", isLoading: true });
+
+    try {
+      // 1. VERIFICA SE O RESUMO JÁ EXISTE NO BANCO DE DADOS
+      const checkInitialQuery = `
+        query {
+          items(ids: [${itemId}]) {
+            column_values(ids: ["executive_summary"]) { text }
+          }
+        }
+      `;
+      const initialResponse = await monday.api(checkInitialQuery);
+      const existingText = initialResponse.data?.items[0]?.column_values[0]?.text;
+
+      // Se o texto já existir e não for vazio, exibe ele e PARA a função aqui!
+      if (existingText && existingText.trim() !== "") {
+        console.log("▶️ Resumo já existe! Puxando direto da coluna.");
+        setAiModal({ isOpen: true, text: existingText, isLoading: false });
+        return; // O 'return' impede que o código continue e dispare o n8n
+      }
+
+      // 2. SE NÃO EXISTE, DISPARA O GATILHO PARA O N8N GERAR
+      console.log("▶️ Resumo não existe. Acionando a IA...");
+      setAiModal({ isOpen: true, text: "Ai is a Loading...", isLoading: true });
+      
+      const triggerMutation = `
+        mutation {
+          change_simple_column_value(
+            item_id: ${itemId}, 
+            board_id: ${CLIENT_BOARD_ID}, 
+            column_id: "ai_trigger", 
+            value: "Gerar" 
+          ) { id }
+        }
+      `;
+      await monday.api(triggerMutation);
+
+      // 3. INICIA A SONDAGEM (POLLING) PARA ESPERAR A RESPOSTA
+      let attempts = 0;
+      const maxAttempts = 15;
+      
+      const intervalId = setInterval(async () => {
+        attempts++;
+        console.log(`▶️ Sondagem ${attempts}...`);
+        
+        const checkQuery = `
+          query {
+            items(ids: [${itemId}]) {
+              column_values(ids: ["executive_summary"]) { text }
+            }
+          }
+        `;
+        const checkResponse = await monday.api(checkQuery);
+        const fetchedText = checkResponse.data?.items[0]?.column_values[0]?.text;
+
+        if (fetchedText && fetchedText.trim() !== "") {
+          clearInterval(intervalId);
+          setAiModal({ isOpen: true, text: fetchedText, isLoading: false });
+        } else if (attempts >= maxAttempts) {
+          clearInterval(intervalId);
+          setAiModal({ isOpen: true, text: "Tempo limite esgotado. Tente novamente.", isLoading: false });
+        }
+      }, 3000);
+
+    } catch (error) {
+      console.error("❌ ERRO:", error);
+      setAiModal({ isOpen: true, text: "Falha de comunicação no React. Veja o console.", isLoading: false });
     }
   };
 
@@ -295,7 +500,7 @@ function App() {
                     <div className="p-8 text-center text-outline font-semibold">No projects match the selected filters.</div>
                   )}
 
-                  {filteredItems.map((item, index) => {
+                  {paginatedItems.map((item, index) => {
                     const statusText = getColumnText(item, 'project_stage');
                     const isExpanded = !!expandedItems[item.id];
                     const subitems = item.subitems || [];
@@ -303,25 +508,44 @@ function App() {
                     const itemCompletion = getCompletionPercentage(subitems);
                     const barColor = itemCompletion === 100 ? 'bg-status-success' : itemCompletion >= 50 ? 'bg-status-info' : 'bg-status-critical';
                     const textColor = itemCompletion === 100 ? 'text-status-success' : itemCompletion >= 50 ? 'text-status-info' : 'text-status-critical';
-                    const isLast = index === filteredItems.length - 1;
+                    const isLast = index === paginatedItems.length - 1;
 
                     return (
                       <div key={item.id} className={`transition-all duration-200 hover:bg-surface-container-low hover:shadow-sm ${!isLast ? 'border-b border-border-subtle' : ''}`}>
                         <div className="p-4 flex items-center justify-between">
                           <div className="flex items-center gap-4 flex-1">
-                            <div className="w-10 h-10 rounded-full border-2 border-surface-muted p-0.5 shrink-0">
-                              <img alt="Task Owner" className="w-full h-full rounded-full object-cover" src={defaultUserPhoto} />
-                            </div>
+                            {/* FOTO DO LÍDER DINÂMICA */}
+                            {(() => {
+                              const projectLead = getProjectLead(item.column_values);
+                              return (
+                                <div
+                                  className="w-10 h-10 rounded-full border-2 border-surface-muted p-0.5 shrink-0 bg-surface-container-low flex items-center justify-center overflow-hidden"
+                                  title={projectLead ? `Project Lead: ${projectLead.name}` : "Unassigned"}
+                                >
+                                  {projectLead ? (
+                                    <img alt={projectLead.name} className="w-full h-full rounded-full object-cover" src={projectLead.photo_thumb_small} />
+                                  ) : (
+                                    <span className="material-symbols-outlined text-on-surface-variant text-xl">person_off</span>
+                                  )}
+                                </div>
+                              );
+                            })()}
                             <div>
                               <h3 className="text-lg font-semibold text-on-surface">{item.name}</h3>
                               <div className="text-on-surface-variant flex items-center gap-3 text-xs mt-1">
+                                {getColumnText(item, 'location_dropdown') && (
+                                  <span className="flex items-center gap-0.5 px-2 py-0.5 rounded-full bg-surface-muted border border-border-subtle text-on-surface-variant font-medium">
+                                    <span className="material-symbols-outlined text-[13px]">location_on</span>
+                                    {getColumnText(item, 'location_dropdown')}
+                                  </span>
+                                )}
                                 <div className="flex items-center gap-1">
                                   <span className="material-symbols-outlined text-sm">event</span>
-                                  {getColumnText(item, 'due_date') || 'TBD'}
+                                  <span className="font-semibold">Due Date:</span> {getColumnText(item, 'due_date') || 'TBD'}
                                 </div>
                                 <button
                                   className="flex items-center gap-1 px-2 py-0.5 rounded bg-surface-muted text-primary hover:bg-primary-fixed border border-primary-fixed-dim transition-colors cursor-pointer text-xs font-medium"
-                                  onClick={() => openAiModal(item.name, getMockAiSummary(item.name, statusText))}
+                                  onClick={() => handleGenerateAI(item.id)}
                                 >
                                   <span className="material-symbols-outlined text-[14px]">auto_awesome</span> AI Resume
                                 </button>
@@ -331,20 +555,11 @@ function App() {
 
                           {/* PROJECT STATUS — 5 options */}
                           <div className="flex items-center gap-4">
-                            <select
-                              className={`${getProjectStatusColor(statusText)} text-xs font-semibold px-3 py-1 rounded-full border-none focus:ring-0 cursor-pointer appearance-none text-center outline-none hover:opacity-80 transition-opacity`}
+                            <StatusDropdown
                               value={statusText || ''}
-                              onChange={(e) => updateItemStatus(CLIENT_BOARD_ID, item.id, 'project_stage', e.target.value)}
-                            >
-                              <option value="Assigned" className="bg-white text-black">Assigned</option>
-                              <option value="Acknowledged" className="bg-white text-black">Acknowledged</option>
-                              <option value="In progress" className="bg-white text-black">In progress</option>
-                              <option value="On hold" className="bg-white text-black">On hold</option>
-                              <option value="Completed" className="bg-white text-black">Completed</option>
-                              {statusText && !['Assigned', 'Acknowledged', 'In progress', 'On hold', 'Completed'].includes(statusText) && (
-                                <option value={statusText} className="bg-white text-black hidden">{statusText}</option>
-                              )}
-                            </select>
+                              options={PROJECT_STATUS_OPTIONS}
+                              onChange={(val) => updateItemStatus(CLIENT_BOARD_ID, item.id, 'project_stage', val)}
+                            />
 
                             <button className="p-1 hover:bg-surface-muted rounded-full outline-none" onClick={() => toggleAccordion(item.id)}>
                               <span
@@ -382,28 +597,50 @@ function App() {
                                   return (
                                     <div key={sub.id} className="pb-4 border-b border-border-subtle/50 last:border-0 last:pb-2">
                                       <div className="flex items-center justify-between mb-2">
-                                        <span className="text-sm text-on-surface">{sub.name}</span>
+                                        <div className="flex items-center gap-2">
+                                          {/* Dono da subtarefa */}
+                                          {(() => {
+                                            const owner = getTaskOwner(sub.column_values);
+                                            return (
+                                              <div className="flex-shrink-0">
+                                                {owner ? (
+                                                  <img
+                                                    src={owner.photo_thumb_small}
+                                                    alt={owner.name}
+                                                    title={`Assignee: ${owner.name}`}
+                                                    className="w-7 h-7 rounded-full border border-border-subtle object-cover"
+                                                  />
+                                                ) : (
+                                                  <div
+                                                    className="w-7 h-7 rounded-full bg-surface-container flex items-center justify-center border border-dashed border-border-subtle"
+                                                    title="Unassigned"
+                                                  >
+                                                    <span className="material-symbols-outlined text-[16px] text-on-surface-variant">person_off</span>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })()}
+                                          <span className="text-sm text-on-surface">{sub.name}</span>
+                                        </div>
 
                                         {/* SUB-ITEM STATUS — 4 options, kept as-is */}
-                                        <select
-                                          className={`${getStatusColor(subStatus)} text-xs font-semibold px-2 py-0.5 rounded-full border-none focus:ring-0 cursor-pointer appearance-none text-center min-w-[80px] outline-none hover:opacity-80 transition-opacity`}
+                                        <StatusDropdown
                                           value={subStatus || ''}
-                                          onChange={(e) => updateItemStatus(sub.board.id, sub.id, 'status', e.target.value)}
-                                        >
-                                          <option value="Done" className="bg-white text-black">Done</option>
-                                          <option value="In progress" className="bg-white text-black">In progress</option>
-                                          <option value="Stuck" className="bg-white text-black">Stuck</option>
-                                          <option value="Not started" className="bg-white text-black">Not started</option>
-                                        </select>
+                                          options={SUBITEM_STATUS_OPTIONS}
+                                          onChange={(val) => updateItemStatus(sub.board.id, sub.id, 'status', val)}
+                                          size="sm"
+                                        />
                                       </div>
                                       <div className="text-[10px] text-outline font-semibold mt-1 uppercase">
-                                        {subDueDate || 'NO DATE'}
+                                        Due Date: {subDueDate || 'NO DATE'}
                                       </div>
                                     </div>
                                   );
                                 })
                               )}
                             </div>
+
                           </div>
                         )}
                       </div>
@@ -412,15 +649,53 @@ function App() {
                 </div>
 
                 {/* Pagination */}
-                <div className="mt-6 flex items-center justify-center gap-2 text-sm">
-                  <button className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors">Previous</button>
-                  <button className="w-8 h-8 flex items-center justify-center bg-primary text-white rounded">1</button>
-                  <button className="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded">2</button>
-                  <button className="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded">3</button>
-                  <span className="px-1 text-on-surface-variant">...</span>
-                  <button className="w-8 h-8 flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high rounded">10</button>
-                  <button className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors">Next</button>
-                </div>
+                {totalPages > 1 && (
+                  <div className="mt-6 flex items-center justify-center gap-2 text-sm">
+                    <button
+                      className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      Previous
+                    </button>
+
+                    {(() => {
+                      const pageNums = getPageNumbers();
+                      const result = [];
+                      let lastPage = 0;
+                      for (const page of pageNums) {
+                        if (lastPage && page - lastPage > 1) {
+                          result.push(
+                            <span key={`ellipsis-${page}`} className="px-1 text-on-surface-variant">...</span>
+                          );
+                        }
+                        result.push(
+                          <button
+                            key={page}
+                            className={`w-8 h-8 flex items-center justify-center rounded transition-colors ${
+                              page === currentPage
+                                ? 'bg-primary text-white'
+                                : 'text-on-surface-variant hover:bg-surface-container-high'
+                            }`}
+                            onClick={() => setCurrentPage(page)}
+                          >
+                            {page}
+                          </button>
+                        );
+                        lastPage = page;
+                      }
+                      return result;
+                    })()}
+
+                    <button
+                      className="px-3 py-1.5 text-on-surface-variant hover:bg-surface-container-high rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      disabled={currentPage === totalPages}
+                    >
+                      Next
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Right Column: Stats & Progress */}
@@ -492,37 +767,40 @@ function App() {
         </main>
       </div>
 
-      {/* AI Resume Modal */}
-      {aiModal.open && (
-        <div
-          className="fixed inset-0 bg-on-background/30 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={closeAiModal}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-border-subtle"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 py-4 border-b border-border-subtle flex justify-between items-center bg-surface-container-low">
-              <h2 className="text-lg font-semibold text-on-surface flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary">auto_awesome</span>
-                Project AI Summary
-              </h2>
-              <button className="text-on-surface-variant hover:text-on-surface transition-colors" onClick={closeAiModal}>
+      {/* Modal de Inteligência Artificial */}
+      {aiModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface-container-lowest border border-border-subtle rounded-2xl p-8 max-w-lg w-full max-h-[80vh] shadow-2xl flex flex-col relative">
+
+            {/* Botão Fechar — só aparece quando não está carregando */}
+            {!aiModal.isLoading && (
+              <button
+                onClick={() => setAiModal({ isOpen: false, text: "", isLoading: false })}
+                className="absolute top-4 right-4 text-on-surface-variant hover:text-on-surface transition-colors"
+              >
                 <span className="material-symbols-outlined">close</span>
               </button>
-            </div>
-            <div className="p-6">
-              <h3 className="text-base font-semibold text-on-surface mb-3">{aiModal.title}</h3>
-              <p className="text-sm text-on-surface-variant leading-relaxed">{aiModal.content}</p>
-            </div>
-            <div className="px-6 py-4 border-t border-border-subtle bg-surface-container-low flex justify-end">
-              <button
-                className="px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:opacity-90 transition-opacity"
-                onClick={closeAiModal}
+            )}
+
+            {/* Cabeçalho dinâmico */}
+            <div className="flex items-center gap-3 mb-4">
+              <span
+                className={`material-symbols-outlined text-3xl ${
+                  aiModal.isLoading
+                    ? 'text-[#8337be] animate-spin'
+                    : 'text-[#8337be]'
+                }`}
               >
-                Close Summary
-              </button>
+                {aiModal.isLoading ? 'sync' : 'auto_awesome'}
+              </span>
+              <h2 className="text-xl font-bold text-on-surface">AI Executive Summary</h2>
             </div>
+
+            {/* Conteúdo com scroll */}
+            <div className="overflow-y-auto flex-1 text-on-surface-variant text-sm leading-relaxed whitespace-pre-wrap bg-surface-container-low p-4 rounded-xl border border-border-subtle">
+              {aiModal.text}
+            </div>
+
           </div>
         </div>
       )}
