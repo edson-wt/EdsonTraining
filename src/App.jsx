@@ -15,7 +15,7 @@ function App() {
   const [filterDate, setFilterDate] = useState('All');
 
   const [expandedItems, setExpandedItems] = useState({});
-  const [aiModal, setAiModal] = useState({ open: false, title: '', content: '' });
+  const [aiModal, setAiModal] = useState({ isOpen: false, text: "", isLoading: false });
   const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
@@ -209,22 +209,55 @@ function App() {
     return [...range].sort((a, b) => a - b);
   };
 
-  // --- AI Modal ---
-  const openAiModal = (title, content) => setAiModal({ open: true, title, content });
-  const closeAiModal = () => setAiModal({ open: false, title: '', content: '' });
+  // --- GERADOR DE RESUMO IA COM POLLING ---
+  const handleGenerateAI = async (itemId) => {
+    // Abre o modal em estado de loading
+    setAiModal({ isOpen: true, text: "A Inteligência Artificial está analisando o projeto...", isLoading: true });
 
-  const getMockAiSummary = (projectName, statusText) => {
-    const status = (statusText || '').toLowerCase();
-    if (status.includes('completed')) {
-      return `${projectName} has been successfully completed. All deliverables have been met and the project was closed on schedule. Final documentation and handoff are complete. No pending action items remain.`;
-    } else if (status.includes('in progress')) {
-      return `${projectName} is currently in progress and tracking on schedule. Key milestones are being met as planned. The team is actively working through the remaining tasks. No critical blockers at this time.`;
-    } else if (status.includes('on hold')) {
-      return `${projectName} is currently on hold pending stakeholder review and additional approvals. The team is prepared to resume work once the hold is lifted. Current completion is paused until further notice.`;
-    } else if (status.includes('acknowledged')) {
-      return `${projectName} has been acknowledged and is in the planning phase. The project scope has been reviewed and accepted. Work is scheduled to begin once resources are confirmed and allocated.`;
-    } else {
-      return `${projectName} has been assigned and is awaiting initial review. The project scope and deliverables are being defined. Team assignments will be confirmed once the kickoff meeting is scheduled.`;
+    try {
+      // 1. Dispara o gatilho na monday.com
+      const triggerMutation = `
+        mutation {
+          change_simple_column_value(
+            item_id: ${itemId},
+            board_id: ${CLIENT_BOARD_ID},
+            column_id: "ID_DA_COLUNA_GATILHO",
+            value: "Gerar"
+          ) { id }
+        }
+      `;
+      await monday.api(triggerMutation);
+
+      // 2. Inicia a sondagem (Polling) a cada 3 segundos
+      let attempts = 0;
+      const maxAttempts = 15; // Timeout de segurança (45 segundos)
+
+      const intervalId = setInterval(async () => {
+        attempts++;
+
+        const checkQuery = `
+          query {
+            items(ids: [${itemId}]) {
+              column_values(ids: ["executive_summary"]) { text }
+            }
+          }
+        `;
+        const response = await monday.api(checkQuery);
+        const fetchedText = response.data?.items[0]?.column_values[0]?.text;
+
+        // Se o texto chegou da IA, para o cronômetro e exibe!
+        if (fetchedText && fetchedText.trim() !== "") {
+          clearInterval(intervalId);
+          setAiModal({ isOpen: true, text: fetchedText, isLoading: false });
+        } else if (attempts >= maxAttempts) {
+          clearInterval(intervalId);
+          setAiModal({ isOpen: true, text: "A IA está demorando mais que o esperado. Tente novamente em alguns instantes.", isLoading: false });
+        }
+      }, 3000);
+
+    } catch (error) {
+      console.error("Erro ao gerar IA:", error);
+      setAiModal({ isOpen: true, text: "Falha de comunicação com o servidor da IA.", isLoading: false });
     }
   };
 
@@ -343,7 +376,7 @@ function App() {
                                 </div>
                                 <button
                                   className="flex items-center gap-1 px-2 py-0.5 rounded bg-surface-muted text-primary hover:bg-primary-fixed border border-primary-fixed-dim transition-colors cursor-pointer text-xs font-medium"
-                                  onClick={() => openAiModal(item.name, getMockAiSummary(item.name, statusText))}
+                                  onClick={() => handleGenerateAI(item.id)}
                                 >
                                   <span className="material-symbols-outlined text-[14px]">auto_awesome</span> AI Resume
                                 </button>
@@ -425,6 +458,17 @@ function App() {
                                   );
                                 })
                               )}
+                            </div>
+
+                            {/* Botão AI dentro do accordion */}
+                            <div className="px-6 pb-5 pt-1">
+                              <button
+                                onClick={() => handleGenerateAI(item.id)}
+                                className="flex items-center gap-2 bg-[#8337be] text-white text-sm font-bold px-4 py-2 rounded-full shadow hover:bg-[#6915a5] transition-all"
+                              >
+                                <span className="material-symbols-outlined text-lg">auto_awesome</span>
+                                Gerar Resumo com IA
+                              </button>
                             </div>
                           </div>
                         )}
@@ -552,37 +596,40 @@ function App() {
         </main>
       </div>
 
-      {/* AI Resume Modal */}
-      {aiModal.open && (
-        <div
-          className="fixed inset-0 bg-on-background/30 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-          onClick={closeAiModal}
-        >
-          <div
-            className="bg-surface-container-lowest rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-border-subtle"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="px-6 py-4 border-b border-border-subtle flex justify-between items-center bg-surface-container-low">
-              <h2 className="text-lg font-semibold text-on-surface flex items-center gap-2">
-                <span className="material-symbols-outlined text-primary">auto_awesome</span>
-                Project AI Summary
-              </h2>
-              <button className="text-on-surface-variant hover:text-on-surface transition-colors" onClick={closeAiModal}>
+      {/* Modal de Inteligência Artificial */}
+      {aiModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface-container-lowest border border-border-subtle rounded-2xl p-8 max-w-lg w-full shadow-2xl flex flex-col relative">
+
+            {/* Botão Fechar — só aparece quando não está carregando */}
+            {!aiModal.isLoading && (
+              <button
+                onClick={() => setAiModal({ isOpen: false, text: "", isLoading: false })}
+                className="absolute top-4 right-4 text-on-surface-variant hover:text-on-surface transition-colors"
+              >
                 <span className="material-symbols-outlined">close</span>
               </button>
-            </div>
-            <div className="p-6">
-              <h3 className="text-base font-semibold text-on-surface mb-3">{aiModal.title}</h3>
-              <p className="text-sm text-on-surface-variant leading-relaxed">{aiModal.content}</p>
-            </div>
-            <div className="px-6 py-4 border-t border-border-subtle bg-surface-container-low flex justify-end">
-              <button
-                className="px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:opacity-90 transition-opacity"
-                onClick={closeAiModal}
+            )}
+
+            {/* Cabeçalho dinâmico */}
+            <div className="flex items-center gap-3 mb-4">
+              <span
+                className={`material-symbols-outlined text-3xl ${
+                  aiModal.isLoading
+                    ? 'text-[#8337be] animate-spin'
+                    : 'text-[#8337be]'
+                }`}
               >
-                Close Summary
-              </button>
+                {aiModal.isLoading ? 'sync' : 'auto_awesome'}
+              </span>
+              <h2 className="text-xl font-bold text-on-surface">AI Executive Summary</h2>
             </div>
+
+            {/* Conteúdo */}
+            <div className="text-on-surface-variant text-sm leading-relaxed whitespace-pre-wrap bg-surface-container-low p-4 rounded-xl border border-border-subtle">
+              {aiModal.text}
+            </div>
+
           </div>
         </div>
       )}
